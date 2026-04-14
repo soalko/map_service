@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Interesting Places Map</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Leaflet core -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- MarkerCluster plugin -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        /* Top control bar */
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 140px;
+            right: 140px;
+            z-index: 1000;
+            background: rgba(255,255,255,0.95);
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            pointer-events: auto;
+        }
+        .controls input, .controls button {
+            padding: 6px 12px;
+            font-size: 14px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        .controls button {
+            background: #2c3e50;
+            color: white;
+            cursor: pointer;
+            border: none;
+        }
+        .controls .point-btn {
+            background: #07ce5f;
+        }
+        .controls .point-btn:hover {
+            background: #1e8449;
+        }
+        .controls .clear-btn {
+            background: #d30000;
+        }
+        .controls .clear-btn:hover {
+            background: #950000;
+        }
+        .controls button:hover {
+            background: #1e2b36;
+        }
+        .geocoder-input {
+            width: 180px;
+        }
+        /* Right sidebar */
+        .sidebar {
+            position: absolute;
+            top: 90px;
+            right: 10px;
+            width: 320px;
+            max-height: calc(100vh - 110px);
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            overflow-y: auto;
+            display: none;
+            flex-direction: column;
+            pointer-events: auto;
+            font-size: 14px;
+        }
+        .sidebar-header {
+            padding: 12px;
+            background: #2c3e50;
+            color: white;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+        }
+        .sidebar-header button {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+        }
+        .results-list {
+            padding: 10px;
+        }
+        .result-card {
+            background: #f9f9f9;
+            border-left: 4px solid #ff6200;
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 6px;
+            transition: 0.2s;
+            cursor: pointer;
+        }
+        .result-card:hover {
+            background: #eef;
+            transform: translateX(-3px);
+        }
+        .result-card h4 {
+            margin: 0 0 5px 0;
+            font-size: 16px;
+        }
+        .result-card p {
+            margin: 4px 0;
+            color: #555;
+        }
+        .result-card .distance {
+            font-weight: bold;
+            color: #e67e22;
+        }
+        .directions-btn-card {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 8px;
+            font-size: 12px;
+            width: 100%;
+        }
+        .directions-btn-card:hover {
+            background: #2980b9;
+        }
+        @media (max-width: 700px) {
+            .controls { flex-direction: column; width: calc(100% - 20px); left: 10px; right: auto; top: 10px; }
+            .sidebar { width: 280px; top: 180px; max-height: calc(100vh - 200px); }
+            .geocoder-input { width: auto; }
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <input type="text" id="geocoderInput" class="geocoder-input" placeholder="Центр поиска...">
+        <button id="geocodeBtn" class="point-btn">Задать центр поиска</button>
+        <input type="text" id="searchInput" placeholder="Место поиска...">
+        <input type="number" id="radiusInput" placeholder="Радиус (м)" value="2000">
+        <button id="searchCategory">По категории</button>
+        <button id="searchName">По названию</button>
+        <button id="clearMarkers" class="clear-btn">Очистить</button>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Right sidebar for results -->
+    <div id="resultsSidebar" class="sidebar">
+        <div class="sidebar-header">
+            <span>Результаты поиска (<span id="resultCount">0</span>)</span>
+            <button id="closeSidebar">&times;</button>
+        </div>
+        <div id="resultsList" class="results-list">
+            <!-- Cards will be inserted here -->
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
