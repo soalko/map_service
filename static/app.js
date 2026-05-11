@@ -149,9 +149,13 @@ window.routeToPlace = function(lat, lon, name) {
 // ---------- Rich popup content ----------
 function buildPopupContent(place) {
     let content = `<b>${place.name || 'Unnamed place'}</b><br>`;
-    content += `📏 Расстояние: ${place.distance ? place.distance.toFixed(0) : '?'} m<br>`;
+    content += `📏 Distance: ${place.distance ? place.distance.toFixed(0) : '?'} m<br>`;
     content += `🏷️ ${place.category} → ${place.subclass}<br>`;
+
     const tags = place.tags || {};
+    let hoursHtml = '';
+
+    // Address
     if (tags['addr:street'] || tags['addr:housenumber']) {
         let address = '';
         if (tags['addr:street']) address += tags['addr:street'];
@@ -159,12 +163,23 @@ function buildPopupContent(place) {
         if (tags['addr:city']) address += ', ' + tags['addr:city'];
         content += `📍 <i>${address}</i><br>`;
     }
-    if (tags['opening_hours']) content += `🕒 ${tags['opening_hours']}<br>`;
+
+    if (tags['opening_hours']) {
+        let hours = tags['opening_hours'];
+        if (hours === '24/7') hours = '🕒 Open 24/7';
+        else if (hours === 'off') hours = '🚫 Permanently closed';
+        else hours = `🕒 ${hours}`;
+        content += `${hours}<br>`;
+    }
+
     if (tags['phone']) content += `📞 <a href="tel:${tags['phone']}">${tags['phone']}</a><br>`;
     if (tags['website']) content += `🌐 <a href="${tags['website']}" target="_blank">Website</a><br>`;
     if (tags['wheelchair'] === 'yes') content += `♿ Wheelchair accessible<br>`;
+    else if (tags['wheelchair'] === 'no') content += `🚫 Not wheelchair accessible<br>`;
+
+    // Directions button
     if (currentCenter) {
-        content += `<br><button onclick="window.routeToPlace(${place.lat}, ${place.lon}, '${place.name?.replace(/'/g, "\\'") || ''}')" style="background:#0080ff; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Построить маршрут</button>`;
+        content += `<br><button onclick="window.routeToPlace(${place.lat}, ${place.lon}, '${place.name?.replace(/'/g, "\\'") || ''}')" style="background:#3498db; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">🚗 Directions from search center</button>`;
     } else {
         content += `<br><i>Click on the map to set a start point first</i>`;
     }
@@ -188,9 +203,9 @@ function showSidebar(places) {
         card.className = 'result-card';
         const distanceText = place.distance ? `${place.distance.toFixed(0)} m` : '? m';
         card.innerHTML = `
-            <h4>${escapeHtml(place.name || 'Unnamed place')}</h4>
-            <p><span class="distance">📏 ${distanceText}</span> &nbsp; 🏷️ ${place.category} → ${place.subclass}</p>
-            <button class="directions-btn-card" data-lat="${place.lat}" data-lon="${place.lon}" data-name="${escapeHtml(place.name || '')}">Построить маршрут</button>
+        <h4>${escapeHtml(place.name || 'Unnamed place')}</h4>
+        <p><span class="distance">📏 ${distanceText}</span> &nbsp; 🏷️ ${place.category} → ${place.subclass}</p>
+        <button class="directions-btn-card" data-lat="${place.lat}" data-lon="${place.lon}" data-name="${escapeHtml(place.name || '')}">🚗 Directions from search center</button>
         `;
         card.addEventListener('click', (e) => {
             if (e.target.classList && e.target.classList.contains('directions-btn-card')) return;
