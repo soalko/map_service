@@ -4,6 +4,8 @@ sqlalchemy
 geoalchemy2
 psycopg2-binary
 pydantic
+pydantic-settings
+python-multipart
 pyrosm
 geopandas
 shapely

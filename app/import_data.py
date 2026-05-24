@@ -1,20 +1,28 @@
 import sys
 import logging
+import json
+import gc
+import psycopg2.extras
 import pandas as pd
-from pyrosm import OSM
 import geopandas as gpd
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from .database import SessionLocal
 from . import models, config
 
+# Регистрация адаптера JSONB для корректной обработки словарей
+try:
+    psycopg2.extras.register_default_jsonb(load=False)
+    psycopg2.extras.register_default_json(load=False)
+except Exception:
+    pass
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ========== EXPANDED INTERESTING TAGS ==========
-# Now covers more OSM keys and values, without being too huge.
-# Each entry: key -> list of values (or True to get all values for that key)
+# ---------- Настройки фильтрации POI ----------
 INTERESTING_TAGS = {
-    "amenity": [  # keep original + add more
+    "amenity": [
         "cafe", "restaurant", "pub", "bar", "fast_food", "cinema", "theatre",
         "museum", "library", "place_of_worship", "hospital", "pharmacy",
         "bank", "post_office", "police", "fire_station", "school", "university",
@@ -22,7 +30,7 @@ INTERESTING_TAGS = {
         "fuel", "car_wash", "parking", "bicycle_parking", "bus_station",
         "taxi", "atm", "bench", "toilets", "drinking_water", "shelter"
     ],
-    "shop": [  # more shop types
+    "shop": [
         "supermarket", "bakery", "butcher", "clothes", "mall", "convenience",
         "hairdresser", "beauty", "books", "stationery", "electronics",
         "furniture", "hardware", "jewelry", "sports", "toys", "gift",
@@ -46,158 +54,143 @@ INTERESTING_TAGS = {
         "station", "stop_position", "platform", "bus_stop", "tram_stop",
         "subway_entrance"
     ],
-    # NEW CATEGORIES:
-    "office": True,          # catch all offices (True means any value)
-    "man_made": [            # interesting man-made features
+    "office": True,
+    "man_made": [
         "tower", "water_tower", "windmill", "lighthouse", "pier", "bridge",
         "monitoring_station", "surveillance", "chimney", "flagpole"
     ],
-    "natural": [             # natural features
+    "natural": [
         "peak", "volcano", "spring", "cave_entrance", "tree", "waterfall",
         "bay", "beach", "cliff", "hill", "valley"
     ]
 }
 
-# Additional tags we want to extract from OSM (will become columns in the DataFrame,
-# then later moved into the `tags` JSON column)
 EXTRA_TAGS = [
     'phone', 'website', 'opening_hours', 'wheelchair', 'cuisine', 'brand',
     'addr:street', 'addr:housenumber', 'addr:city', 'addr:postcode',
     'capacity', 'operator', 'email', 'payment:cash', 'payment:cards',
-    'internet_access', 'smoking', 'outdoor_seating', 'takeaway', 'delivery',
-    # NEW ONES:
-    'wheelchair:description', 'fee', 'charge', 'payment:bitcoin', 'building',
-    'height', 'diet:vegetarian', 'organic', 'heritage', 'wikipedia',
-    'healthcare', 'vaccination', 'parking:access', 'sport', 'lit',
-    'social_facility', 'community_centre', 'emergency'
+    'internet_access', 'smoking', 'outdoor_seating', 'takeaway', 'delivery'
 ]
 
 
-def extract_places(osm_file):
-    osm = OSM(osm_file)
-    all_pois = []
-
-    for tag_key, tag_values in INTERESTING_TAGS.items():
-        # Build the filter dictionary
-        if tag_values is True:
-            custom_filter = {tag_key: True}
-        else:
-            custom_filter = {tag_key: tag_values}
-
-        # Use get_pois with extra attributes
-        pois = osm.get_pois(
-            custom_filter=custom_filter,
-            extra_attributes=EXTRA_TAGS
-        )
-
-        if pois is not None and len(pois) > 0:
-            pois['category'] = tag_key
-            # For subclass: use the tag_key value if it's a single column,
-            # otherwise try to infer the most specific tag.
-            if tag_key in pois.columns:
-                pois['subclass'] = pois[tag_key]
-            else:
-                # For filters with True, there's no single column; use first matching tag
-                # For simplicity, set subclass to tag_key itself.
-                pois['subclass'] = tag_key
-
-            all_pois.append(pois)
-
-    if not all_pois:
-        logger.warning("No interesting places found in the OSM file.")
-        return gpd.GeoDataFrame()
-
-    # Combine all POIs
-    combined = gpd.GeoDataFrame(pd.concat(all_pois, ignore_index=True))
-
-    # Drop duplicates based on OSM id (if present)
-    if 'id' in combined.columns:
-        combined = combined.drop_duplicates(subset='id')
+def process_category(osm, tag_key, tag_values, db: Session):
+    """Обрабатывает одну категорию и вставляет в БД (пакетно)."""
+    # Фильтр
+    if tag_values is True:
+        custom_filter = {tag_key: True}
     else:
-        logger.warning("No 'id' column found; duplicates may remain.")
+        custom_filter = {tag_key: tag_values}
 
-    # Ensure we have a geometry column
-    if 'geometry' not in combined.columns:
-        logger.error("No geometry column found in extracted data.")
-        return gpd.GeoDataFrame()
+    pois = osm.get_pois(custom_filter=custom_filter, extra_attributes=EXTRA_TAGS)
+    if pois is None or len(pois) == 0:
+        logger.info(f"Категория {tag_key}: нет данных")
+        return 0
 
-    # Convert all geometries to points (centroid if polygon/line)
-    combined['geometry'] = combined.geometry.centroid
-    combined['lat'] = combined.geometry.y
-    combined['lon'] = combined.geometry.x
+    # Добавляем мета-информацию
+    pois['category'] = tag_key
+    if tag_key in pois.columns:
+        pois['subclass'] = pois[tag_key]
+    else:
+        pois['subclass'] = tag_key
 
-    # Create OSM id as string
-    combined['osm_id'] = combined['id'].astype(str)
+    # Геометрия -> точки (центроиды)
+    pois['geometry'] = pois.geometry.centroid
+    pois['lat'] = pois.geometry.y
+    pois['lon'] = pois.geometry.x
+    pois['osm_id'] = pois['id'].astype(str)
 
-    # Build the `tags` JSON column: collect all OSM tag columns
-    # These include the original tag_key columns (amenity, shop, etc.) and the extra tags
-    tag_columns = []
-    # All columns that are not in our fixed list
-    fixed_cols = ['id', 'osm_id', 'name', 'geometry', 'category', 'subclass', 'lat', 'lon', 'tags']
-    for col in combined.columns:
-        if col not in fixed_cols:
-            tag_columns.append(col)
-
-    # Create a dictionary for each row
-    combined['tags'] = combined.apply(
+    # Формируем JSON-поле tags
+    fixed_cols = ['id', 'osm_id', 'name', 'geometry', 'category', 'subclass', 'lat', 'lon']
+    tag_columns = [col for col in pois.columns if col not in fixed_cols]
+    pois['tags'] = pois.apply(
         lambda row: {col: row[col] for col in tag_columns if pd.notna(row[col])},
         axis=1
     )
 
-    # Keep only the columns required by the Place model
-    keep_cols = ['osm_id', 'name', 'lat', 'lon', 'geometry', 'category', 'subclass', 'tags']
-    # Some rows may have no name – that's fine (will become NULL in DB)
-    combined = combined[keep_cols]
+    # Подготовка записей
+    records = []
+    for _, row in pois.iterrows():
+        name = row.get('name')
+        if pd.isna(name):
+            name = None
 
-    return combined
+        lat = float(row['lat']) if not pd.isna(row['lat']) else None
+        lon = float(row['lon']) if not pd.isna(row['lon']) else None
+        if lat is None or lon is None:
+            continue
+
+        # Обработка тегов: удаляем мусорный ключ и преобразуем в JSON-строку
+        tags_dict = row['tags']
+        if isinstance(tags_dict, dict):
+            if 'tags' in tags_dict:
+                del tags_dict['tags']
+            # Очищаем от None
+            tags_dict = {k: v for k, v in tags_dict.items() if v is not None}
+            tags_json = json.dumps(tags_dict, ensure_ascii=False)
+        else:
+            tags_json = '{}'
+
+        category = str(row['category'])[:50] if not pd.isna(row['category']) else None
+        subclass = str(row['subclass'])[:50] if not pd.isna(row['subclass']) else None
+
+        records.append({
+            'osm_id': str(row['osm_id']),
+            'name': name,
+            'lat': lat,
+            'lon': lon,
+            'geom': f'POINT({lon} {lat})',
+            'tags': tags_json,
+            'category': category,
+            'subclass': subclass
+        })
+
+    if not records:
+        logger.info(f"Категория {tag_key}: нет валидных записей после фильтрации")
+        return 0
+
+    # Пакетная вставка / обновление
+    stmt = text("""
+        INSERT INTO places (osm_id, name, lat, lon, geom, tags, category, subclass)
+        VALUES (:osm_id, :name, :lat, :lon, ST_GeomFromText(:geom, 4326), CAST(:tags AS JSONB), :category, :subclass)
+        ON CONFLICT (osm_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            lat = EXCLUDED.lat,
+            lon = EXCLUDED.lon,
+            geom = EXCLUDED.geom,
+            tags = EXCLUDED.tags,
+            category = EXCLUDED.category,
+            subclass = EXCLUDED.subclass
+    """)
+
+    batch_size = 1000
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i+batch_size]
+        db.execute(stmt, batch)
+        db.commit()
+        logger.info(f"Категория {tag_key}: вставлено {len(batch)} записей (всего {len(records)})")
+
+    count = len(records)
+    # Освобождаем память
+    del pois
+    del records
+    gc.collect()
+    return count
 
 
-def import_to_postgis(gdf):
-    """Insert GeoDataFrame into places table with proper type handling."""
+def import_osm_data():
+    from pyrosm import OSM
+    osm = OSM(config.settings.OSM_DATA_PATH)
     db = SessionLocal()
+    total = 0
     try:
-        # Clear existing data (optional – comment out if you want to append)
-        db.query(models.Place).delete()
-        db.commit()
-
-        for _, row in gdf.iterrows():
-            # Handle NaN values
-            name = row.get('name')
-            if pd.isna(name):
-                name = None
-
-            lat = float(row['lat']) if not pd.isna(row['lat']) else None
-            lon = float(row['lon']) if not pd.isna(row['lon']) else None
-            if lat is None or lon is None:
-                continue
-
-            point_wkt = f"POINT({lon} {lat})"
-
-            # tags is already a dict, clean it
-            tags = row['tags']
-            if isinstance(tags, dict):
-                # Remove any NaN values inside dict
-                tags = {k: v for k, v in tags.items() if not (isinstance(v, float) and pd.isna(v))}
-            else:
-                tags = {}
-
-            place = models.Place(
-                osm_id=str(row['osm_id']),
-                name=name,
-                lat=lat,
-                lon=lon,
-                geom=point_wkt,
-                tags=tags,
-                category=str(row['category']),
-                subclass=str(row['subclass']) if not pd.isna(row['subclass']) else None
-            )
-            db.add(place)
-
-        db.commit()
-        logger.info(f"Successfully imported {len(gdf)} places with enriched tags.")
-
+        for tag_key, tag_values in INTERESTING_TAGS.items():
+            logger.info(f"Обработка категории: {tag_key}")
+            cnt = process_category(osm, tag_key, tag_values, db)
+            total += cnt
+            logger.info(f"Категория {tag_key} завершена: {cnt} объектов")
+        logger.info(f"Импорт завершён. Всего обработано: {total}")
     except Exception as e:
-        logger.error(f"Import failed: {e}")
+        logger.error(f"Ошибка: {e}")
         db.rollback()
         raise
     finally:
@@ -205,10 +198,4 @@ def import_to_postgis(gdf):
 
 
 if __name__ == "__main__":
-    osm_path = config.settings.OSM_DATA_PATH
-    logger.info(f"Reading OSM data from {osm_path}")
-    gdf = extract_places(osm_path)
-    if len(gdf) > 0:
-        import_to_postgis(gdf)
-    else:
-        logger.error("No places extracted. Check OSM file and tags.")
+    import_osm_data()

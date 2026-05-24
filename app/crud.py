@@ -1,7 +1,40 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy import or_
 from geoalchemy2.functions import ST_Distance, ST_Transform, ST_SetSRID, ST_MakePoint
 from . import models, schemas
+
+
+RU_CATEGORY_MAP = {
+    "кафе": ["cafe"],
+    "ресторан": ["restaurant"],
+    "бар": ["bar", "pub"],
+    "аптека": ["pharmacy"],
+    "больница": ["hospital", "clinic", "doctors", "dentist"],
+    "школа": ["school", "college", "kindergarten"],
+    "университет": ["university"],
+    "магазин": ["shop", "supermarket", "convenience", "mall"],
+    "развлечения": ["cinema", "theatre", "stadium", "sports_centre", "fitness_centre", "theme_park"],
+    "супермаркет": ["supermarket"],
+    "парк": ["park", "garden", "dog_park", "nature_reserve"],
+    "музей": ["museum"],
+    "отель": ["hotel", "hostel", "guest_house", "apartment"],
+    "транспорт": ["public_transport", "bus_station", "station", "platform", "bus_stop", "tram_stop"],
+    "банкомат": ["atm"],
+    "банк": ["bank"],
+    "заправка": ["fuel"],
+    "парковка": ["parking", "bicycle_parking"],
+}
+
+
+def _expand_category_terms(raw_category: str) -> list[str]:
+    category = (raw_category or "").strip().lower()
+    if not category:
+        return []
+    terms = {category}
+    if category in RU_CATEGORY_MAP:
+        terms.update(RU_CATEGORY_MAP[category])
+    return list(terms)
 
 def get_places_by_category(db: Session, lat: float, lon: float, radius: float, category: str):
     """
@@ -23,10 +56,15 @@ def get_places_by_category(db: Session, lat: float, lon: float, radius: float, c
     )
 
     if category.lower() != "all":
-        # Match either category or subclass (e.g., "amenity" or "cafe")
-        query = query.filter(
-            (models.Place.category == category) | (models.Place.subclass == category)
-        )
+        terms = _expand_category_terms(category)
+        filters = []
+        for term in terms:
+            filters.extend([
+                models.Place.category.ilike(term),
+                models.Place.subclass.ilike(term),
+            ])
+        if filters:
+            query = query.filter(or_(*filters))
 
     results = query.all()
     # Convert to Place schema and add distance

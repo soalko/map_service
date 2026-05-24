@@ -11,9 +11,18 @@
 7. Run the server: `uvicorn app.main:app --reload`.
 8. Open http://localhost:8000/static/index.html
 
+## Auth API
+
+- `POST /auth/register` – body: `{username, password, display_name?}`
+- `POST /auth/login` – body: `{username, password}`
+- `GET /auth/me` – requires `Authorization: Bearer <token>`
+- `POST /auth/logout` – requires `Authorization: Bearer <token>`
+
 ## API Endpoints
 
 - `POST /search/category` – body: `{lat, lon, radius, category}`
 - `POST /search/name` – body: `{lat, lon, radius, name}`
+- `POST /reviews` – multipart form: `district_id`, `rating`, `comment`, `photos[]` (0..10), auth required
+- `GET /reviews/{district_id}`
 
 Returns JSON with list of places including name, coordinates, distance, category.

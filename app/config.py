@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     POSTGRES_PORT: str = os.getenv("POSTGRES_PORT", "5432")
     POSTGRES_DB: str = os.getenv("POSTGRES_DB", "poi_db")
     DATABASE_URL: str = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-
+    # Здесь должен быть путь к Вашему файлу .osm.pbf для извлечения геопространственных данных
     OSM_DATA_PATH: str = os.getenv("OSM_DATA_PATH", "data/kaliningrad-260228.osm.pbf")
 
 settings = Settings()
