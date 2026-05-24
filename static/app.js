@@ -494,7 +494,7 @@ function renderCalculationDetails(stats) {
     `).join("");
 
     return `
-        <div style="font-size:12px;background:#f9f9f9;padding:10px;border-radius:6px;line-height:1.45;">
+        <div style="font-size:14px;background:#f9f9f9;padding:10px;border-radius:6px;line-height:1.45;">
             <b>Как считается итоговый балл района</b><br>
             
             <b>Шаг 1. Нормализованные показатели групп</b><br>
@@ -594,9 +594,9 @@ async function showDistrictSidebar(featureProps, clickedLayer) {
         document.getElementById("districtArea").innerText = stats.area_km2 ? Number(stats.area_km2).toFixed(2) : "?";
         const statsGroupsEl = document.getElementById("statsGroups");
         const calculationDetailsEl = document.getElementById("calculationDetails");
-        if (statsGroupsEl) statsGroupsEl.innerHTML = renderStatsTable(stats.groups);
+        // if (statsGroupsEl) statsGroupsEl.innerHTML = renderStatsTable(stats.groups);
         if (calculationDetailsEl) {
-            calculationDetailsEl.innerHTML = `${statsGroupsEl ? "" : renderStatsTable(stats.groups)}${renderCalculationDetails(stats)}`;
+            calculationDetailsEl.innerHTML = `${renderCalculationDetails(stats)}`;
         }
     } catch (e) {
         const calculationDetailsEl = document.getElementById("calculationDetails");
